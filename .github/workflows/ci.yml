@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: m13tLabs/gh-actions-templates/.github/workflows/docker-ci.yml@main
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
+    with:
+      image_name: openjarvis
+      smoke_test: docker run --rm "$IMAGE" --version | grep -qE '^jarvis, version '

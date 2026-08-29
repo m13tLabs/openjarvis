@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Type of release to build: patch, minor, major, or custom'
+        type: choice
+        options: [patch, minor, major, custom]
+        default: patch
+        required: true
+      custom_version:
+        description: "Version to release (only used when release_type is 'custom', e.g. 1.2.3)"
+        type: string
+        required: false
+        default: ''
+      default_branch:
+        description: 'Branch to release from and push commits/tags back to'
+        type: string
+        required: false
+        default: 'develop'
+      draft_release:
+        description: 'Create the GitHub release as a draft'
+        type: boolean
+        required: false
+        default: true
+
+jobs:
+  release:
+    uses: m13tLabs/gh-actions-templates/.github/workflows/docker-release.yml@main
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    with:
+      images: '["ghcr.io/m13tlabs/openjarvis","docker.io/m13t/openjarvis"]'
+      app_id: ${{ vars.CI_APP_ID }}
+      release_type: ${{ inputs.release_type }}
+      custom_version: ${{ inputs.custom_version }}
+      default_branch: ${{ inputs.default_branch }}
+      draft_release: ${{ inputs.draft_release }}
+      dockerhub: true
+    secrets: inherit
