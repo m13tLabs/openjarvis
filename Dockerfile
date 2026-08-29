@@ -46,6 +46,24 @@ RUN maturin build --release \
       --out /wheels
 
 # ---------------------------------------------------------------------------
+# Frontend builder
+#
+# `jarvis serve` (openjarvis/server/app.py) mounts a web UI at `/` only when
+# openjarvis/server/static/ exists - and the PyPI package doesn't ship it. The
+# sdist carries the Vite/React SPA source under frontend/; build it here. (The
+# @tauri-apps/* deps are for the optional desktop shell and degrade gracefully
+# in a plain browser - isTauri() gates them.)
+# ---------------------------------------------------------------------------
+FROM node:22-slim AS frontend-builder
+
+COPY --from=rust-builder /src/frontend /fe
+WORKDIR /fe
+# Skip `tsc -b` (the `build` script's type-check step) - esbuild transpiles
+# without it and a strict type error must not fail the image build.
+RUN npm ci --no-audit --no-fund \
+ && npx vite build --outDir /static --emptyOutDir
+
+# ---------------------------------------------------------------------------
 # Python builder
 # ---------------------------------------------------------------------------
 FROM python:3.12-slim AS builder
@@ -53,14 +71,17 @@ FROM python:3.12-slim AS builder
 ARG JARVIS_VERSION
 
 COPY --from=rust-builder /wheels /wheels
+COPY --from=frontend-builder /static /static
 
 RUN pip install --no-cache-dir uv \
  && uv pip install --system "openjarvis[server]==${JARVIS_VERSION}" \
  && uv pip install --system /wheels/openjarvis_rust-*.whl \
- && rm -rf /wheels
+ && cp -r /static "$(python -c 'import openjarvis.server, pathlib; print(pathlib.Path(openjarvis.server.__file__).parent / "static")')" \
+ && rm -rf /wheels /static
 
-# Fail the build if the mandatory native extension did not actually land.
-RUN python -c "from openjarvis._rust_bridge import RUST_AVAILABLE; assert RUST_AVAILABLE, 'openjarvis_rust missing'"
+# Fail the build if the mandatory native extension or the web UI did not land.
+RUN python -c "from openjarvis._rust_bridge import RUST_AVAILABLE; assert RUST_AVAILABLE, 'openjarvis_rust missing'" \
+ && python -c "import openjarvis.server, pathlib; p = pathlib.Path(openjarvis.server.__file__).parent / 'static' / 'index.html'; assert p.is_file(), 'frontend static/ missing'"
 
 # ---------------------------------------------------------------------------
 # Runtime

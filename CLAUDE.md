@@ -46,7 +46,9 @@ maturin). There is **no `openjarvis-rust` package on PyPI**, and `maturin` is
 only in the `[dev]` extra.
 
 But the **sdist** (`openjarvis-<v>.tar.gz`, ~42 MB) ships the full `rust/`
-workspace (17 crates). So both Dockerfiles:
+workspace (17 crates) *and* the `frontend/` SPA source. Both Dockerfiles
+download it once in `rust-builder` and the `frontend-builder` stage
+`COPY --from=rust-builder /src/frontend`. So both Dockerfiles:
 
 1. `pip download --no-deps --no-binary :all:` the sdist, `tar --strip-components=1` it.
 2. `rustup` with `--default-toolchain none` — `rust/rust-toolchain.toml` pins
@@ -79,6 +81,29 @@ workspace (17 crates). So both Dockerfiles:
   re-declared bare `ARG JARVIS_VERSION` in each stage that needs it) so the one
   Renovate-managed line drives every stage.
 
+## The web UI (`frontend-builder` stage)
+
+`jarvis serve` (`openjarvis/server/app.py`) mounts an SPA at `/` **only if
+`openjarvis/server/static/` exists** — and the PyPI package doesn't ship it, so
+without this stage `GET /` is a 404 (only `/dashboard` — a server-rendered
+savings/telemetry page — and `/docs` work).
+
+The sdist carries the SPA source under `frontend/` (Vite + React + PWA; its
+`vite.config.ts` `outDir` is literally `../src/openjarvis/server/static`). The
+`frontend-builder` stage (`node:22-slim`) does `npm ci` + `npx vite build
+--outDir /static`, and the Python builder `cp`s that into the installed
+package's `server/static/`. The build asserts `server/static/index.html` exists.
+
+- **`npx vite build`, not `npm run build`** — the `build` script is `tsc -b &&
+  vite build`; we skip `tsc -b` so a strict type error upstream can't fail the
+  image. esbuild transpiles without it.
+- The `@tauri-apps/*` deps are for the optional desktop shell; `isTauri()`
+  gates them and the web build degrades gracefully (skips the desktop setup
+  wizard, disables autostart/global-shortcut, etc.).
+- `node:22-slim` in `frontend-builder` is JS-only and arch-independent — the
+  same stage works for `Dockerfile` and `Dockerfile.gpu`.
+- Chunk-size warning ("larger than 500 kB") is upstream and cosmetic.
+
 ## Runtime image extras
 
 Beyond the upstream package, the runtime stage adds:
@@ -89,8 +114,9 @@ Beyond the upstream package, the runtime stage adds:
   is all HEALTHCHECK needs — kept as JSON exec form to satisfy hadolint DL3025.
 
 Deliberately **not** added (not needed for `serve` / the `orchestrator` agent,
-only bloat): Node.js (only `ClaudeCodeAgent` + WhatsApp Baileys bridge),
-`faster-whisper`/`[speech]`, `torch`/`[dev]` SFT-GRPO training.
+only bloat): runtime Node.js (the frontend is prebuilt into `static/`;
+`ClaudeCodeAgent` + the WhatsApp Baileys bridge would need it but we don't use
+them), `faster-whisper`/`[speech]`, `torch`/`[dev]` SFT-GRPO training.
 
 ## Consuming side (infra repo)
 
