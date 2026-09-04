@@ -5,6 +5,8 @@ on:
     branches: [develop]
   pull_request:
   merge_group:
+  # allow manual action run
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -18,4 +20,5 @@ jobs:
       checks: write
     with:
       image_name: openjarvis
+      dockerfiles: '["Dockerfile","Dockerfile.gpu"]'
       smoke_test: bash smoke_test.sh
