@@ -53,15 +53,26 @@ RUN maturin build --release \
 # sdist carries the Vite/React SPA source under frontend/; build it here. (The
 # @tauri-apps/* deps are for the optional desktop shell and degrade gracefully
 # in a plain browser - isTauri() gates them.)
+#
+# We also inject patches/insecure-context-polyfill.js: OpenJarvis is usually
+# served over plain HTTP on a LAN, where secure-context-only APIs the SPA uses
+# are missing - crypto.randomUUID (called at store init -> hard crash on load)
+# and navigator.clipboard (copy buttons throw). Loaded as a classic <script> in
+# <head> so it runs before the app bundle. Covered by test/ and smoke_test.sh.
 # ---------------------------------------------------------------------------
 FROM node:22-slim AS frontend-builder
 
 COPY --from=rust-builder /src/frontend /fe
+COPY patches/insecure-context-polyfill.js /fe/public/insecure-context-polyfill.js
 WORKDIR /fe
 # Skip `tsc -b` (the `build` script's type-check step) - esbuild transpiles
 # without it and a strict type error must not fail the image build.
-RUN npm ci --no-audit --no-fund \
- && npx vite build --outDir /static --emptyOutDir
+RUN sed -i 's#</head>#    <script src="/insecure-context-polyfill.js"></script>\n  </head>#' index.html \
+ && grep -q 'insecure-context-polyfill.js' index.html \
+ && npm ci --no-audit --no-fund \
+ && npx vite build --outDir /static --emptyOutDir \
+ && test -f /static/insecure-context-polyfill.js \
+ && grep -q 'insecure-context-polyfill.js' /static/index.html
 
 # ---------------------------------------------------------------------------
 # Python builder
@@ -79,9 +90,17 @@ RUN pip install --no-cache-dir uv \
  && cp -r /static "$(python -c 'import openjarvis.server, pathlib; print(pathlib.Path(openjarvis.server.__file__).parent / "static")')" \
  && rm -rf /wheels /static
 
-# Fail the build if the mandatory native extension or the web UI did not land.
+# The server's CSP is a hardcoded `default-src 'self' 'unsafe-inline'
+# 'unsafe-eval'` (openjarvis/server/middleware.py) with no knob - it blocks the
+# SPA's `data:` webfonts (geist / KaTeX). Widen font-src / img-src to allow them.
+RUN CSP_FILE="$(python -c 'import openjarvis.server.middleware as m; print(m.__file__)')" \
+ && sed -i "s|default-src 'self' 'unsafe-inline' 'unsafe-eval'|default-src 'self' 'unsafe-inline' 'unsafe-eval'; font-src 'self' data:; img-src 'self' data:|g" "$CSP_FILE"
+
+# Fail the build if the mandatory native extension, the web UI, the polyfill,
+# or the CSP fix did not land.
 RUN python -c "from openjarvis._rust_bridge import RUST_AVAILABLE; assert RUST_AVAILABLE, 'openjarvis_rust missing'" \
- && python -c "import openjarvis.server, pathlib; p = pathlib.Path(openjarvis.server.__file__).parent / 'static' / 'index.html'; assert p.is_file(), 'frontend static/ missing'"
+ && python -c "import openjarvis.server, pathlib; d = pathlib.Path(openjarvis.server.__file__).parent / 'static'; assert (d / 'index.html').is_file(), 'frontend static/ missing'; assert (d / 'insecure-context-polyfill.js').is_file(), 'insecure-context polyfill missing'; assert 'insecure-context-polyfill.js' in (d / 'index.html').read_text(), 'polyfill not referenced by index.html'" \
+ && python -c "from openjarvis.server.middleware import SECURITY_HEADERS as h; csp = h['Content-Security-Policy']; assert 'font-src' in csp and 'data:' in csp, csp"
 
 # ---------------------------------------------------------------------------
 # Runtime
