@@ -18,4 +18,4 @@ jobs:
       checks: write
     with:
       image_name: openjarvis
-      smoke_test: docker run --rm "$IMAGE" --version | grep -qE '^jarvis, version '
+      smoke_test: bash smoke_test.sh

@@ -1,0 +1,62 @@
+Pass a per-server `env` block from the MCP config through to the stdio
+subprocess.
+
+Upstream `openjarvis.mcp.loader.load_mcp_tools_from_config` reads `command` and
+`args` from each server entry but silently ignores `env`, and
+`openjarvis.mcp.transport.StdioTransport` spawns the child with
+`subprocess.Popen(...)` and no `env=` — so an npx-based shim (mcp-remote,
+`@baruchiro/paperless-mcp` v2, ...) has no way to receive its API token, base
+URL, CA bundle, etc. This wires `cfg["env"]` -> `StdioTransport(env=)` ->
+`Popen(env={**os.environ, **cfg_env})`.
+
+Applied in the image build against the installed package
+(`patch -p1 -d <site-packages>/openjarvis`); the build then asserts the new
+`env` parameter is present, so an upstream refactor fails the build loudly
+instead of silently dropping the feature.
+--- a/mcp/transport.py
++++ b/mcp/transport.py
+@@ -2,6 +2,7 @@
+ 
+ from __future__ import annotations
+ 
++import os
+ import subprocess
+ from abc import ABC, abstractmethod
+ from typing import TYPE_CHECKING, Any, List, Optional
+@@ -58,8 +59,11 @@
+     stdin/stdout.
+     """
+ 
+-    def __init__(self, command: List[str]) -> None:
++    def __init__(self, command: List[str], *, env: Optional[dict] = None) -> None:
+         self._command = command
++        self._env = (
++            {**os.environ, **{k: str(v) for k, v in env.items()}} if env else None
++        )
+         self._process: Optional[subprocess.Popen[str]] = None
+         self._start()
+ 
+@@ -71,6 +75,7 @@
+             stdout=subprocess.PIPE,
+             stderr=subprocess.PIPE,
+             text=True,
++            env=self._env,
+         )
+ 
+     def send(self, request: MCPRequest) -> MCPResponse:
+--- a/mcp/loader.py
++++ b/mcp/loader.py
+@@ -90,11 +90,12 @@
+             token = cfg.get("token")
+             command = cfg.get("command", "")
+             args = cfg.get("args", [])
++            env = cfg.get("env")
+ 
+             if url:
+                 transport = StreamableHTTPTransport(url=url, token=token)
+             elif command:
+-                transport = StdioTransport(command=[command] + args)
++                transport = StdioTransport(command=[command] + args, env=env)
+             else:
+                 logger.warning(
+                     "MCP server '%s' has neither 'url' nor 'command' — skipping",

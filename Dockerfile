@@ -75,6 +75,32 @@ RUN sed -i 's#</head>#    <script src="/insecure-context-polyfill.js"></script>\
  && grep -q 'insecure-context-polyfill.js' /static/index.html
 
 # ---------------------------------------------------------------------------
+# Node.js runtime + MCP stdio shims
+#
+# `jarvis serve` runs MCP servers configured as stdio transports by spawning
+# their `command` (the [tools.mcp] `servers` list in config.toml). Ours are npm
+# packages - `mcp-remote` (the GitLab MCP OAuth bridge) and
+# `@baruchiro/paperless-mcp` - so the runtime needs Node. Pre-install them
+# globally here so the spawn never has to reach the network and the versions
+# are pinned + Renovate-visible; the runtime stage copies just `node` + the
+# global modules out of this stage.
+#
+# bullseye (glibc 2.31) on purpose: the copied `node` binary then runs on BOTH
+# runtime bases - Debian bookworm (this file) and Ubuntu 22.04 / glibc 2.35
+# (Dockerfile.gpu).
+# ---------------------------------------------------------------------------
+FROM node:22-bullseye-slim AS node-runtime
+
+# renovate: datasource=npm depName=mcp-remote versioning=npm
+ARG MCP_REMOTE_VERSION=0.8.3
+# renovate: datasource=npm depName=@baruchiro/paperless-mcp versioning=npm
+ARG PAPERLESS_MCP_VERSION=2.0.1
+RUN npm install -g --no-audit --no-fund \
+      "mcp-remote@${MCP_REMOTE_VERSION}" \
+      "@baruchiro/paperless-mcp@${PAPERLESS_MCP_VERSION}" \
+ && npm cache clean --force
+
+# ---------------------------------------------------------------------------
 # Python builder
 # ---------------------------------------------------------------------------
 FROM python:3.12-slim AS builder
@@ -89,6 +115,18 @@ RUN pip install --no-cache-dir uv \
  && uv pip install --system /wheels/openjarvis_rust-*.whl \
  && cp -r /static "$(python -c 'import openjarvis.server, pathlib; print(pathlib.Path(openjarvis.server.__file__).parent / "static")')" \
  && rm -rf /wheels /static
+
+# Upstream's MCP stdio loader reads `command`/`args` from each server entry but
+# ignores `env`, and StdioTransport spawns the child with no `env=` - so an
+# npx shim (mcp-remote, @baruchiro/paperless-mcp v2) can't be handed its token
+# / base URL. Patch it in; the assert makes an upstream refactor fail loudly.
+COPY patches/mcp-stdio-env.patch /tmp/mcp-stdio-env.patch
+RUN apt-get update && apt-get install -y --no-install-recommends patch \
+ && rm -rf /var/lib/apt/lists/* \
+ && OJ_DIR="$(python -c 'import openjarvis, pathlib; print(pathlib.Path(openjarvis.__file__).parent)')" \
+ && patch -p1 --forward -d "$OJ_DIR" < /tmp/mcp-stdio-env.patch \
+ && rm /tmp/mcp-stdio-env.patch \
+ && python -c "import inspect; from openjarvis.mcp.transport import StdioTransport; assert 'env' in inspect.signature(StdioTransport.__init__).parameters, 'mcp-stdio-env patch did not apply'"
 
 # The server's CSP is a hardcoded `default-src 'self' 'unsafe-inline'
 # 'unsafe-eval'` (openjarvis/server/middleware.py) with no knob - it blocks the
@@ -119,11 +157,27 @@ LABEL org.opencontainers.image.authors='Martin Reinhardt (martin@m13t.de)' \
     org.opencontainers.image.licenses='MIT'
 
 # git: `jarvis skill` clones the skill-index repo. curl: the HEALTHCHECK below.
+# libstdc++6: the `node` binary copied below links against it and
+# python:3.12-slim does not ship it.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git curl ca-certificates \
+ && apt-get install -y --no-install-recommends git curl ca-certificates libstdc++6 \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/local /usr/local
+
+# Node.js + the pre-installed MCP stdio shims (see the node-runtime stage).
+# npm's own global bin symlinks aren't copied, so recreate the ones we invoke.
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+ && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+ && ln -s ../lib/node_modules/mcp-remote/dist/proxy.js /usr/local/bin/mcp-remote \
+ && ln -s "../lib/node_modules/@baruchiro/paperless-mcp/build/index.js" /usr/local/bin/paperless-mcp \
+ && node --version && npm --version \
+ && node -e "require('/usr/local/lib/node_modules/mcp-remote/package.json'); require('/usr/local/lib/node_modules/@baruchiro/paperless-mcp/package.json')" \
+ && test -e /usr/local/bin/mcp-remote && test -e /usr/local/bin/paperless-mcp
+ENV NPM_CONFIG_CACHE=/tmp/.npm NPM_CONFIG_UPDATE_NOTIFIER=false
+
 WORKDIR /app
 
 EXPOSE 8000
