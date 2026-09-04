@@ -1,5 +1,8 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "assignees": [
+    "hypery2k"
+  ],
   "extends": [
     "github>m13tLabs/renovate-config#v0.2.0"
   ]

@@ -2,3 +2,6 @@ ignored:
   # uv is a throwaway build-time installer in the builder stage and never ends
   # up in the final image; pinning its version buys nothing.
   - DL3013
+  # Dockerfile.gpu pulls python from the Ubuntu release the CUDA base tracks;
+  # pinning the apt package versions would break on every base image bump.
+  - DL3008
