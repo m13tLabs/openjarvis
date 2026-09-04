@@ -38,4 +38,8 @@ jobs:
       dockerhub: true
       variant_dockerfile: Dockerfile.gpu
       variant_suffix: '-gpu'
+      # openjarvis-base:*-gpu is only published for linux/amd64
+      # (release-base.yml skips the emulated arm64 leg for it), so the
+      # variant build can't target linux/arm64 like the main image does.
+      variant_platforms: linux/amd64
     secrets: inherit
