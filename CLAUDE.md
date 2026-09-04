@@ -15,12 +15,60 @@ backend"). No application code of our own. Publishes:
 `config.json` (`{"version": "0.1.0"}`) is the repo's own release version, bumped
 by the `Release` workflow (`docker-release.yml` template). `JARVIS_VERSION` is
 the upstream PyPI version, a global `ARG` bumped by Renovate
-(`# renovate: datasource=pypi depName=openjarvis`).
+(`# renovate: datasource=pypi depName=openjarvis`) — now only present in
+`Dockerfile.base` / `Dockerfile.base.gpu` (see below).
 
 CI: `docker-ci.yml` template. `smoke_test: bash smoke_test.sh` — runs `test/`
 (`node --test`) and then boots each built image and checks the web UI, the
 randomUUID polyfill, the CSP, and `RUST_AVAILABLE` (see the plain-HTTP patches
 section). Run it locally with `IMAGE=<tag> bash smoke_test.sh`.
+
+## Base image split (`Dockerfile.base` / `Dockerfile.base.gpu`)
+
+**Added 2026-09-04** because the release build (`docker-release.yml`) was
+taking close to an hour — mostly the arm64 leg of `maturin build --release`
+(Rust) + `npm ci` + `vite build` running under QEMU emulation, twice (plain +
+GPU image), on every release.
+
+The actual build now lives in `Dockerfile.base` / `Dockerfile.base.gpu` — same
+stages the two Dockerfiles used to have inline (rust-builder, frontend-builder,
+node-runtime, builder), each with a BuildKit `--mount=type=cache` for its
+package manager (cargo registry + target dir, npm's download cache, uv's
+cache) so the weekly rebuild doesn't recompile from zero either. Their final
+stage *is* the runtime image, minus the per-release `BUILD_DATE`/`APP_VERSION`
+labels.
+
+`.github/workflows/release-base.yml` builds and pushes them — weekly (Wed
+01:30 UTC), on any push touching `Dockerfile.base*`/`patches/**`, or manually
+— as `ghcr.io/m13tlabs/openjarvis-base` / `docker.io/m13t/openjarvis-base`,
+tagged `<YYYY.MM.DD>[-gpu]` and `latest[-gpu]`. It pushes no commits; Renovate
+discovers the new registry tags itself.
+
+`Dockerfile` / `Dockerfile.gpu` are now thin: `ARG BASE_VERSION` (Renovate-bumped
+via `# renovate: datasource=docker depName=ghcr.io/m13tlabs/openjarvis-base`,
+GPU's default value already carries the `-gpu` suffix since it's a distinct tag
+family) → `FROM openjarvis-base:${BASE_VERSION}` → stamp the OCI labels. A
+release build is now a pull + one `LABEL` layer per platform instead of a
+from-scratch compile.
+
+**Bootstrapping gotcha**: the base images don't exist until `release-base.yml`
+has run at least once. Trigger it manually (`workflow_dispatch`) right after
+merging `Dockerfile.base`/`Dockerfile.base.gpu`, *before* relying on `ci.yml`
+or cutting a release — otherwise the thin Dockerfiles' `FROM` fails to
+resolve. Also worth a one-time check after the first push: the `openjarvis-base`
+GHCR package should be public (matches this repo's visibility) so `docker-ci.yml`'s
+unauthenticated build job can pull it.
+
+Consequence for `JARVIS_VERSION` bumps: they now land in `Dockerfile.base` /
+`Dockerfile.base.gpu` first (still Renovate-bumped, same as before), then have
+to wait for a base rebuild (weekly, or the push-triggered path since it
+touches `Dockerfile.base*`) before a second Renovate PR bumps `BASE_VERSION` in
+`Dockerfile`/`Dockerfile.gpu` to actually pick it up. Two-hop instead of
+one-hop, traded for the release-time win above.
+
+Keep `Dockerfile.base` and `Dockerfile.base.gpu` in sync with each other the
+same way `Dockerfile`/`Dockerfile.gpu` used to need to be kept in sync — same
+stages, CUDA vs. slim bases.
 
 ## The mandatory Rust extension (`openjarvis_rust`)
 

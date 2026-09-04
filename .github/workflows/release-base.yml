@@ -1,0 +1,91 @@
+name: Base image release
+
+# Rebuilds Dockerfile.base / Dockerfile.base.gpu - the slow, rarely-changing
+# layers (Rust extension compile, frontend build, Node runtime, Python env)
+# that the plain Dockerfile / Dockerfile.gpu FROM by pinned tag. Splitting
+# these out and only rebuilding them here means a real release
+# (docker-release.yml) is just a LABEL layer on top of an already-built,
+# already-pushed image instead of a from-scratch Rust+npm compile - that used
+# to make the release build take close to an hour under QEMU for the arm64
+# leg.
+#
+# Runs weekly to pick up base-image security patches even with no code
+# change, and on every push touching the base Dockerfiles / patches so a
+# JARVIS_VERSION (or patch) bump doesn't have to wait for Wednesday. No
+# commits are pushed - Renovate discovers new tags on the registry itself and
+# bumps `ARG BASE_VERSION` in Dockerfile / Dockerfile.gpu on its own schedule.
+on:
+  workflow_dispatch:
+  push:
+    branches: [develop]
+    paths:
+      - Dockerfile.base
+      - Dockerfile.base.gpu
+      - patches/**
+  schedule:
+    # Weekly on Wednesday
+    - cron: '30 1 * * 3'
+
+permissions:
+  contents: read
+
+jobs:
+  base:
+    name: Build and push (${{ matrix.variant }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: main
+            dockerfile: Dockerfile.base
+            suffix: ''
+            # arm64 is worth it here: this build runs at most a few times a
+            # week, not on every release.
+            platforms: linux/amd64,linux/arm64
+          - variant: gpu
+            dockerfile: Dockerfile.base.gpu
+            suffix: '-gpu'
+            # GPU inference is amd64 in practice; skip the emulated arm64 leg.
+            platforms: linux/amd64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Base version
+        id: version
+        run: echo "version=$(date -u +%Y.%m.%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ vars.DOCKER_HUB_USER }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platforms }}
+          push: true
+          tags: |
+            ghcr.io/m13tlabs/openjarvis-base:${{ steps.version.outputs.version }}${{ matrix.suffix }}
+            ghcr.io/m13tlabs/openjarvis-base:latest${{ matrix.suffix }}
+            docker.io/m13t/openjarvis-base:${{ steps.version.outputs.version }}${{ matrix.suffix }}
+            docker.io/m13t/openjarvis-base:latest${{ matrix.suffix }}
+          cache-from: type=registry,ref=ghcr.io/m13tlabs/openjarvis-base:buildcache${{ matrix.suffix }}
+          cache-to: type=registry,ref=ghcr.io/m13tlabs/openjarvis-base:buildcache${{ matrix.suffix }},mode=max
