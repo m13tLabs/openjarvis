@@ -1,0 +1,160 @@
+# OpenJarvis server on a CUDA runtime base, for GPU inference extras.
+#
+# Same PyPI-pinned install as the plain Dockerfile (JARVIS_VERSION drives both,
+# bumped together by Renovate) - only the base image and the Python bootstrap
+# differ. Run with `--gpus all`.
+#
+# Like the plain Dockerfile the mandatory `openjarvis_rust` extension is
+# pulled prebuilt from a base image (Dockerfile.base.gpu / release-base.yml)
+# rather than compiled here - see Dockerfile for why. The rust-wheel stage
+# below still has to be the CUDA base's Python/glibc build (that part lives in
+# Dockerfile.base.gpu itself), so the compiled wheel matches this runtime's
+# Python (Ubuntu 22.04 python3 = 3.10) and glibc exactly.
+
+# renovate: datasource=pypi depName=openjarvis versioning=pep440
+ARG JARVIS_VERSION=1.0.3
+# renovate: datasource=docker depName=ghcr.io/m13tlabs/openjarvis-base
+ARG BASE_VERSION=2026.09.04-gpu
+
+# ---------------------------------------------------------------------------
+# Rust extension wheel - prebuilt, see the file header above.
+# ---------------------------------------------------------------------------
+FROM ghcr.io/m13tlabs/openjarvis-base:${BASE_VERSION} AS rust-wheel
+
+# ---------------------------------------------------------------------------
+# sdist - just for frontend/ (see the plain Dockerfile for why this stays
+# here instead of in the base image). Plain python:3.12-slim is fine - this
+# only downloads + extracts a tarball, no compiled extension is involved.
+# ---------------------------------------------------------------------------
+FROM python:3.12-slim AS sdist
+
+ARG JARVIS_VERSION
+
+RUN mkdir -p /src \
+ && pip download --no-deps --no-binary openjarvis "openjarvis==${JARVIS_VERSION}" -d /dl \
+ && tar xzf /dl/openjarvis-*.tar.gz -C /src --strip-components=1
+
+# ---------------------------------------------------------------------------
+# Frontend builder (see the plain Dockerfile for the why, incl. the
+# crypto.randomUUID polyfill)
+# ---------------------------------------------------------------------------
+FROM node:22-slim AS frontend-builder
+
+COPY --from=sdist /src/frontend /fe
+COPY patches/insecure-context-polyfill.js /fe/public/insecure-context-polyfill.js
+WORKDIR /fe
+RUN --mount=type=cache,target=/root/.npm,sharing=locked \
+    sed -i 's#</head>#    <script src="/insecure-context-polyfill.js"></script>\n  </head>#' index.html \
+ && grep -q 'insecure-context-polyfill.js' index.html \
+ && npm ci --no-audit --no-fund \
+ && npx vite build --outDir /static --emptyOutDir \
+ && test -f /static/insecure-context-polyfill.js \
+ && grep -q 'insecure-context-polyfill.js' /static/index.html
+
+# ---------------------------------------------------------------------------
+# Node.js runtime + MCP stdio shims (see the plain Dockerfile for the why).
+# bullseye/glibc 2.31 so the copied `node` runs on the CUDA base's glibc 2.35.
+# ---------------------------------------------------------------------------
+FROM node:22-bullseye-slim AS node-runtime
+
+# renovate: datasource=npm depName=mcp-remote versioning=npm
+ARG MCP_REMOTE_VERSION=0.8.3
+# renovate: datasource=npm depName=@baruchiro/paperless-mcp versioning=npm
+ARG PAPERLESS_MCP_VERSION=2.0.1
+RUN --mount=type=cache,target=/root/.npm,sharing=locked \
+    npm install -g --no-audit --no-fund \
+      "mcp-remote@${MCP_REMOTE_VERSION}" \
+      "@baruchiro/paperless-mcp@${PAPERLESS_MCP_VERSION}"
+
+# ---------------------------------------------------------------------------
+# Python builder
+# ---------------------------------------------------------------------------
+# renovate: datasource=docker depName=nvidia/cuda
+FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04 AS builder
+
+ARG JARVIS_VERSION
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 python3-pip python3-venv patch \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --from=rust-wheel /wheels /wheels
+COPY --from=frontend-builder /static /static
+
+# See the plain Dockerfile's builder stage for why this check exists.
+RUN BASE_JARVIS_VERSION="$(cat /wheels/JARVIS_VERSION)" \
+ && if [ "$BASE_JARVIS_VERSION" != "$JARVIS_VERSION" ]; then \
+      echo "openjarvis-base wheel was built for JARVIS_VERSION=$BASE_JARVIS_VERSION, this build wants $JARVIS_VERSION - rebuild Dockerfile.base.gpu (workflow_dispatch release-base.yml) or bump BASE_VERSION" >&2; \
+      exit 1; \
+    fi
+
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    pip install --no-cache-dir uv \
+ && uv pip install --system "openjarvis[server]==${JARVIS_VERSION}" \
+ && uv pip install --system /wheels/openjarvis_rust-*.whl \
+ && cp -r /static "$(python3 -c 'import openjarvis.server, pathlib; print(pathlib.Path(openjarvis.server.__file__).parent / "static")')" \
+ && rm -rf /wheels /static
+
+# Teach the MCP stdio transport to pass a per-server `env` to the subprocess
+# (upstream ignores it) - see the plain Dockerfile / patches/mcp-stdio-env.patch.
+COPY patches/mcp-stdio-env.patch /tmp/mcp-stdio-env.patch
+RUN OJ_DIR="$(python3 -c 'import openjarvis, pathlib; print(pathlib.Path(openjarvis.__file__).parent)')" \
+ && patch -p1 --forward -d "$OJ_DIR" < /tmp/mcp-stdio-env.patch \
+ && rm /tmp/mcp-stdio-env.patch \
+ && python3 -c "import inspect; from openjarvis.mcp.transport import StdioTransport; assert 'env' in inspect.signature(StdioTransport.__init__).parameters, 'mcp-stdio-env patch did not apply'"
+
+# Widen the server's hardcoded CSP so the SPA's `data:` webfonts load
+# (see the plain Dockerfile).
+RUN CSP_FILE="$(python3 -c 'import openjarvis.server.middleware as m; print(m.__file__)')" \
+ && sed -i "s|default-src 'self' 'unsafe-inline' 'unsafe-eval'|default-src 'self' 'unsafe-inline' 'unsafe-eval'; font-src 'self' data:; img-src 'self' data:|g" "$CSP_FILE"
+
+RUN python3 -c "from openjarvis._rust_bridge import RUST_AVAILABLE; assert RUST_AVAILABLE, 'openjarvis_rust missing'" \
+ && python3 -c "import openjarvis.server, pathlib; d = pathlib.Path(openjarvis.server.__file__).parent / 'static'; assert (d / 'index.html').is_file(), 'frontend static/ missing'; assert (d / 'insecure-context-polyfill.js').is_file(), 'insecure-context polyfill missing'; assert 'insecure-context-polyfill.js' in (d / 'index.html').read_text(), 'polyfill not referenced by index.html'" \
+ && python3 -c "from openjarvis.server.middleware import SECURITY_HEADERS as h; csp = h['Content-Security-Policy']; assert 'font-src' in csp and 'data:' in csp, csp"
+
+# ---------------------------------------------------------------------------
+# Runtime
+# ---------------------------------------------------------------------------
+# renovate: datasource=docker depName=nvidia/cuda
+FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04
+
+ARG BUILD_DATE
+ARG APP_VERSION
+
+LABEL org.opencontainers.image.authors='Martin Reinhardt (martin@m13t.de)' \
+    org.opencontainers.image.created=$BUILD_DATE \
+    org.opencontainers.image.version=$APP_VERSION \
+    org.opencontainers.image.url='https://hub.docker.com/r/m13t/openjarvis' \
+    org.opencontainers.image.documentation='https://github.com/m13tLabs/openjarvis' \
+    org.opencontainers.image.source='https://github.com/m13tLabs/openjarvis.git' \
+    org.opencontainers.image.licenses='MIT'
+
+# python3: runtime. git: `jarvis skill`. curl: the HEALTHCHECK below.
+# libstdc++6: the `node` binary copied below links against it.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 git curl ca-certificates libstdc++6 \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /usr/local /usr/local
+
+# Node.js + the pre-installed MCP stdio shims (see the node-runtime stage).
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+ && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+ && ln -s ../lib/node_modules/mcp-remote/dist/proxy.js /usr/local/bin/mcp-remote \
+ && ln -s "../lib/node_modules/@baruchiro/paperless-mcp/build/index.js" /usr/local/bin/paperless-mcp \
+ && node --version && npm --version \
+ && node -e "require('/usr/local/lib/node_modules/mcp-remote/package.json'); require('/usr/local/lib/node_modules/@baruchiro/paperless-mcp/package.json')" \
+ && test -e /usr/local/bin/mcp-remote && test -e /usr/local/bin/paperless-mcp
+ENV NPM_CONFIG_CACHE=/tmp/.npm NPM_CONFIG_UPDATE_NOTIFIER=false
+
+WORKDIR /app
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD ["curl", "-fsS", "http://localhost:8000/health"]
+
+ENTRYPOINT ["jarvis"]
+CMD ["serve", "--host", "0.0.0.0", "--port", "8000"]

@@ -3,47 +3,43 @@
 # The pinned version lives in JARVIS_VERSION so Renovate's Dockerfile _VERSION
 # custom manager (github>m13tLabs/renovate-config) can bump it automatically.
 # It is a global ARG (re-declared per stage) so the one line drives every stage.
+#
+# The mandatory openjarvis_rust extension (see below) is NOT compiled here -
+# it's pulled from a prebuilt base image (Dockerfile.base / release-base.yml)
+# to skip a from-scratch Rust release compile on every release build (that
+# used to make this take close to an hour under QEMU for the arm64 leg).
+# Everything else still happens right here at release time - it's fast
+# enough that hiding it behind the weekly base cron isn't worth the added
+# Renovate-bump lag or the risk of it drifting out of sync with whatever
+# JARVIS_VERSION this build actually wants; the version check in the Python
+# builder stage below turns that risk into a loud build failure instead of a
+# silent one.
 
 # renovate: datasource=pypi depName=openjarvis versioning=pep440
 ARG JARVIS_VERSION=1.0.3
+# renovate: datasource=docker depName=ghcr.io/m13tlabs/openjarvis-base
+ARG BASE_VERSION=2026.09.04
 
 # ---------------------------------------------------------------------------
-# Rust extension builder
-#
-# openjarvis/_rust_bridge.py treats the compiled `openjarvis_rust` module as
-# MANDATORY - the SQLite/BM25/ColBERT memory backends have no Python fallback
-# and raise at request time without it. The PyPI package is pure-Python
-# (py3-none-any at every version) and there is no openjarvis-rust on PyPI, but
-# the sdist ships the full `rust/` workspace, so build the extension from there
-# and carry the wheel forward.
+# Rust extension wheel - prebuilt, see the file header above.
 # ---------------------------------------------------------------------------
-FROM python:3.12-slim AS rust-builder
+FROM ghcr.io/m13tlabs/openjarvis-base:${BASE_VERSION} AS rust-wheel
+
+# ---------------------------------------------------------------------------
+# sdist
+#
+# Only fetched here for frontend/ - the wheel has no rust/ or frontend/, only
+# the sdist does (see Dockerfile.base for why --no-binary is scoped to just
+# openjarvis). This is a plain download + tar extract, no compile, so unlike
+# the Rust build it isn't worth pulling from the base image too.
+# ---------------------------------------------------------------------------
+FROM python:3.12-slim AS sdist
 
 ARG JARVIS_VERSION
 
-RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-      build-essential curl ca-certificates pkg-config \
- && rm -rf /var/lib/apt/lists/*
-
-RUN pip install --no-cache-dir maturin
-
-# The wheel has no `rust/` dir; the sdist does. --no-binary forces the sdist.
 RUN mkdir -p /src \
- && pip download --no-deps --no-binary :all: "openjarvis==${JARVIS_VERSION}" -d /dl \
+ && pip download --no-deps --no-binary openjarvis "openjarvis==${JARVIS_VERSION}" -d /dl \
  && tar xzf /dl/openjarvis-*.tar.gz -C /src --strip-components=1
-
-# rust/rust-toolchain.toml pins channel 1.88 (the workspace needs let-chains +
-# is_multiple_of); rustup installs/selects it automatically on the first build.
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup.sh \
- && sh /tmp/rustup.sh -y --default-toolchain none --profile minimal \
- && rm /tmp/rustup.sh
-ENV PATH="/root/.cargo/bin:${PATH}"
-
-WORKDIR /src/rust
-RUN maturin build --release \
-      --manifest-path crates/openjarvis-python/Cargo.toml \
-      --out /wheels
 
 # ---------------------------------------------------------------------------
 # Frontend builder
@@ -62,12 +58,15 @@ RUN maturin build --release \
 # ---------------------------------------------------------------------------
 FROM node:22-slim AS frontend-builder
 
-COPY --from=rust-builder /src/frontend /fe
+COPY --from=sdist /src/frontend /fe
 COPY patches/insecure-context-polyfill.js /fe/public/insecure-context-polyfill.js
 WORKDIR /fe
 # Skip `tsc -b` (the `build` script's type-check step) - esbuild transpiles
 # without it and a strict type error must not fail the image build.
-RUN sed -i 's#</head>#    <script src="/insecure-context-polyfill.js"></script>\n  </head>#' index.html \
+# Cache npm's download cache (not node_modules itself - npm ci always wipes
+# and reinstalls it) so repeat builds skip re-fetching the registry tarballs.
+RUN --mount=type=cache,target=/root/.npm,sharing=locked \
+    sed -i 's#</head>#    <script src="/insecure-context-polyfill.js"></script>\n  </head>#' index.html \
  && grep -q 'insecure-context-polyfill.js' index.html \
  && npm ci --no-audit --no-fund \
  && npx vite build --outDir /static --emptyOutDir \
@@ -95,10 +94,10 @@ FROM node:22-bullseye-slim AS node-runtime
 ARG MCP_REMOTE_VERSION=0.8.3
 # renovate: datasource=npm depName=@baruchiro/paperless-mcp versioning=npm
 ARG PAPERLESS_MCP_VERSION=2.0.1
-RUN npm install -g --no-audit --no-fund \
+RUN --mount=type=cache,target=/root/.npm,sharing=locked \
+    npm install -g --no-audit --no-fund \
       "mcp-remote@${MCP_REMOTE_VERSION}" \
-      "@baruchiro/paperless-mcp@${PAPERLESS_MCP_VERSION}" \
- && npm cache clean --force
+      "@baruchiro/paperless-mcp@${PAPERLESS_MCP_VERSION}"
 
 # ---------------------------------------------------------------------------
 # Python builder
@@ -107,10 +106,21 @@ FROM python:3.12-slim AS builder
 
 ARG JARVIS_VERSION
 
-COPY --from=rust-builder /wheels /wheels
+COPY --from=rust-wheel /wheels /wheels
 COPY --from=frontend-builder /static /static
 
-RUN pip install --no-cache-dir uv \
+# The base's wheel was compiled against whatever JARVIS_VERSION was current
+# when Dockerfile.base last built - fail loudly instead of installing a
+# possibly ABI-mismatched openjarvis_rust/openjarvis[server] combination if
+# this build wants a different version.
+RUN BASE_JARVIS_VERSION="$(cat /wheels/JARVIS_VERSION)" \
+ && if [ "$BASE_JARVIS_VERSION" != "$JARVIS_VERSION" ]; then \
+      echo "openjarvis-base wheel was built for JARVIS_VERSION=$BASE_JARVIS_VERSION, this build wants $JARVIS_VERSION - rebuild Dockerfile.base (workflow_dispatch release-base.yml) or bump BASE_VERSION" >&2; \
+      exit 1; \
+    fi
+
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
+    pip install --no-cache-dir uv \
  && uv pip install --system "openjarvis[server]==${JARVIS_VERSION}" \
  && uv pip install --system /wheels/openjarvis_rust-*.whl \
  && cp -r /static "$(python -c 'import openjarvis.server, pathlib; print(pathlib.Path(openjarvis.server.__file__).parent / "static")')" \
