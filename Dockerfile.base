@@ -1,22 +1,16 @@
-# Prebuilt base for `Dockerfile`: the slow, rarely-changing layers (Rust
-# extension compile, frontend build, Node runtime, Python env assembly)
-# extracted out so a release build doesn't repeat them. Rebuilt weekly (+ on
-# every push that touches this file) by release-base.yml and pushed as
+# Prebuilt base for Dockerfile - JUST the one genuinely long-running step:
+# compiling the mandatory openjarvis_rust extension. Rebuilt weekly (+ on
+# relevant pushes) by release-base.yml and published as
 # ghcr.io/m13tlabs/openjarvis-base / docker.io/m13t/openjarvis-base.
-# `Dockerfile` pins the resulting tag via `BASE_VERSION` (Renovate-bumped)
-# and only stamps per-release OCI labels on top of it.
 #
-# Stage-by-stage rationale is unchanged from when these lived directly in
-# Dockerfile - see git history / CLAUDE.md for the why behind the Rust bridge
-# being mandatory, the frontend polyfill, the MCP stdio shims, and the CSP
-# widening. Keep this in sync with Dockerfile.base.gpu (same stages, CUDA
-# bases) when either changes.
-
-# renovate: datasource=pypi depName=openjarvis versioning=pep440
-ARG JARVIS_VERSION=1.0.3
-
-# ---------------------------------------------------------------------------
-# Rust extension builder
+# Everything else (frontend build, node runtime, Python env assembly) stays
+# in Dockerfile and runs at release time - those are fast enough that hiding
+# them behind this weekly cron isn't worth the two-hop Renovate lag (bump
+# JARVIS_VERSION here -> wait for a base rebuild -> bump BASE_VERSION in
+# Dockerfile) or the risk of a baked-in Rust wheel silently drifting out of
+# sync with whatever openjarvis[server] version a release actually installs.
+# Dockerfile checks the JARVIS_VERSION marker below against its own pin and
+# fails loudly on a mismatch instead of shipping one.
 #
 # openjarvis/_rust_bridge.py treats the compiled `openjarvis_rust` module as
 # MANDATORY - the SQLite/BM25/ColBERT memory backends have no Python fallback
@@ -24,7 +18,10 @@ ARG JARVIS_VERSION=1.0.3
 # (py3-none-any at every version) and there is no openjarvis-rust on PyPI, but
 # the sdist ships the full `rust/` workspace, so build the extension from there
 # and carry the wheel forward.
-# ---------------------------------------------------------------------------
+
+# renovate: datasource=pypi depName=openjarvis versioning=pep440
+ARG JARVIS_VERSION=1.0.3
+
 FROM python:3.12-slim AS rust-builder
 
 ARG JARVIS_VERSION
@@ -36,9 +33,14 @@ RUN apt-get update \
 
 RUN pip install --no-cache-dir maturin
 
-# The wheel has no `rust/` dir; the sdist does. --no-binary forces the sdist.
+# The wheel has no `rust/` dir; the sdist does. --no-binary forces the sdist -
+# scoped to just openjarvis (not :all:), so hatchling's own build-time deps
+# (tomli et al) still install as wheels. :all: cascades the no-binary
+# constraint onto them too, which broke here once tomli shipped a release
+# whose own sdist build needs tomli already installed to parse its
+# pyproject.toml - fine on 3.12 (stdlib tomllib) but circular without it.
 RUN mkdir -p /src \
- && pip download --no-deps --no-binary :all: "openjarvis==${JARVIS_VERSION}" -d /dl \
+ && pip download --no-deps --no-binary openjarvis "openjarvis==${JARVIS_VERSION}" -d /dl \
  && tar xzf /dl/openjarvis-*.tar.gz -C /src --strip-components=1
 
 # rust/rust-toolchain.toml pins channel 1.88 (the workspace needs let-chains +
@@ -56,146 +58,13 @@ RUN --mount=type=cache,target=/root/.cargo/registry,sharing=locked \
     --mount=type=cache,target=/src/rust/target,sharing=locked \
     maturin build --release \
       --manifest-path crates/openjarvis-python/Cargo.toml \
-      --out /wheels
+      --out /wheels \
+ && printf '%s' "${JARVIS_VERSION}" > /wheels/JARVIS_VERSION
 
 # ---------------------------------------------------------------------------
-# Frontend builder
-#
-# `jarvis serve` (openjarvis/server/app.py) mounts a web UI at `/` only when
-# openjarvis/server/static/ exists - and the PyPI package doesn't ship it. The
-# sdist carries the Vite/React SPA source under frontend/; build it here. (The
-# @tauri-apps/* deps are for the optional desktop shell and degrade gracefully
-# in a plain browser - isTauri() gates them.)
-#
-# We also inject patches/insecure-context-polyfill.js: OpenJarvis is usually
-# served over plain HTTP on a LAN, where secure-context-only APIs the SPA uses
-# are missing - crypto.randomUUID (called at store init -> hard crash on load)
-# and navigator.clipboard (copy buttons throw). Loaded as a classic <script> in
-# <head> so it runs before the app bundle. Covered by test/ and smoke_test.sh.
+# Export - just the wheel and the JARVIS_VERSION marker it was built against.
+# Nothing here needs a shell or a filesystem beyond that, so `scratch` keeps
+# this image (and the layers callers pull) as small as possible.
 # ---------------------------------------------------------------------------
-FROM node:22-slim AS frontend-builder
-
-COPY --from=rust-builder /src/frontend /fe
-COPY patches/insecure-context-polyfill.js /fe/public/insecure-context-polyfill.js
-WORKDIR /fe
-# Skip `tsc -b` (the `build` script's type-check step) - esbuild transpiles
-# without it and a strict type error must not fail the image build.
-# Cache npm's download cache (not node_modules itself - npm ci always wipes
-# and reinstalls it) so repeat builds skip re-fetching the registry tarballs.
-RUN --mount=type=cache,target=/root/.npm,sharing=locked \
-    sed -i 's#</head>#    <script src="/insecure-context-polyfill.js"></script>\n  </head>#' index.html \
- && grep -q 'insecure-context-polyfill.js' index.html \
- && npm ci --no-audit --no-fund \
- && npx vite build --outDir /static --emptyOutDir \
- && test -f /static/insecure-context-polyfill.js \
- && grep -q 'insecure-context-polyfill.js' /static/index.html
-
-# ---------------------------------------------------------------------------
-# Node.js runtime + MCP stdio shims
-#
-# `jarvis serve` runs MCP servers configured as stdio transports by spawning
-# their `command` (the [tools.mcp] `servers` list in config.toml). Ours are npm
-# packages - `mcp-remote` (the GitLab MCP OAuth bridge) and
-# `@baruchiro/paperless-mcp` - so the runtime needs Node. Pre-install them
-# globally here so the spawn never has to reach the network and the versions
-# are pinned + Renovate-visible; the runtime stage copies just `node` + the
-# global modules out of this stage.
-#
-# bullseye (glibc 2.31) on purpose: the copied `node` binary then runs on BOTH
-# runtime bases - Debian bookworm (this file) and Ubuntu 22.04 / glibc 2.35
-# (Dockerfile.gpu / Dockerfile.base.gpu).
-# ---------------------------------------------------------------------------
-FROM node:22-bullseye-slim AS node-runtime
-
-# renovate: datasource=npm depName=mcp-remote versioning=npm
-ARG MCP_REMOTE_VERSION=0.8.3
-# renovate: datasource=npm depName=@baruchiro/paperless-mcp versioning=npm
-ARG PAPERLESS_MCP_VERSION=2.0.1
-RUN --mount=type=cache,target=/root/.npm,sharing=locked \
-    npm install -g --no-audit --no-fund \
-      "mcp-remote@${MCP_REMOTE_VERSION}" \
-      "@baruchiro/paperless-mcp@${PAPERLESS_MCP_VERSION}"
-
-# ---------------------------------------------------------------------------
-# Python builder
-# ---------------------------------------------------------------------------
-FROM python:3.12-slim AS builder
-
-ARG JARVIS_VERSION
-
+FROM scratch
 COPY --from=rust-builder /wheels /wheels
-COPY --from=frontend-builder /static /static
-
-RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
-    pip install --no-cache-dir uv \
- && uv pip install --system "openjarvis[server]==${JARVIS_VERSION}" \
- && uv pip install --system /wheels/openjarvis_rust-*.whl \
- && cp -r /static "$(python -c 'import openjarvis.server, pathlib; print(pathlib.Path(openjarvis.server.__file__).parent / "static")')" \
- && rm -rf /wheels /static
-
-# Upstream's MCP stdio loader reads `command`/`args` from each server entry but
-# ignores `env`, and StdioTransport spawns the child with no `env=` - so an
-# npx shim (mcp-remote, @baruchiro/paperless-mcp v2) can't be handed its token
-# / base URL. Patch it in; the assert makes an upstream refactor fail loudly.
-COPY patches/mcp-stdio-env.patch /tmp/mcp-stdio-env.patch
-RUN apt-get update && apt-get install -y --no-install-recommends patch \
- && rm -rf /var/lib/apt/lists/* \
- && OJ_DIR="$(python -c 'import openjarvis, pathlib; print(pathlib.Path(openjarvis.__file__).parent)')" \
- && patch -p1 --forward -d "$OJ_DIR" < /tmp/mcp-stdio-env.patch \
- && rm /tmp/mcp-stdio-env.patch \
- && python -c "import inspect; from openjarvis.mcp.transport import StdioTransport; assert 'env' in inspect.signature(StdioTransport.__init__).parameters, 'mcp-stdio-env patch did not apply'"
-
-# The server's CSP is a hardcoded `default-src 'self' 'unsafe-inline'
-# 'unsafe-eval'` (openjarvis/server/middleware.py) with no knob - it blocks the
-# SPA's `data:` webfonts (geist / KaTeX). Widen font-src / img-src to allow them.
-RUN CSP_FILE="$(python -c 'import openjarvis.server.middleware as m; print(m.__file__)')" \
- && sed -i "s|default-src 'self' 'unsafe-inline' 'unsafe-eval'|default-src 'self' 'unsafe-inline' 'unsafe-eval'; font-src 'self' data:; img-src 'self' data:|g" "$CSP_FILE"
-
-# Fail the build if the mandatory native extension, the web UI, the polyfill,
-# or the CSP fix did not land.
-RUN python -c "from openjarvis._rust_bridge import RUST_AVAILABLE; assert RUST_AVAILABLE, 'openjarvis_rust missing'" \
- && python -c "import openjarvis.server, pathlib; d = pathlib.Path(openjarvis.server.__file__).parent / 'static'; assert (d / 'index.html').is_file(), 'frontend static/ missing'; assert (d / 'insecure-context-polyfill.js').is_file(), 'insecure-context polyfill missing'; assert 'insecure-context-polyfill.js' in (d / 'index.html').read_text(), 'polyfill not referenced by index.html'" \
- && python -c "from openjarvis.server.middleware import SECURITY_HEADERS as h; csp = h['Content-Security-Policy']; assert 'font-src' in csp and 'data:' in csp, csp"
-
-# ---------------------------------------------------------------------------
-# Base runtime
-#
-# Same as Dockerfile's Runtime stage, minus the per-release BUILD_DATE /
-# APP_VERSION labels - Dockerfile stamps those on top of this image so a
-# release build only adds a LABEL layer, not a Rust/npm recompile.
-# ---------------------------------------------------------------------------
-FROM python:3.12-slim
-
-# git: `jarvis skill` clones the skill-index repo. curl: the HEALTHCHECK below.
-# libstdc++6: the `node` binary copied below links against it and
-# python:3.12-slim does not ship it.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends git curl ca-certificates libstdc++6 \
- && rm -rf /var/lib/apt/lists/*
-
-COPY --from=builder /usr/local /usr/local
-
-# Node.js + the pre-installed MCP stdio shims (see the node-runtime stage).
-# npm's own global bin symlinks aren't copied, so recreate the ones we invoke.
-COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
-COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
-RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
- && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
- && ln -s ../lib/node_modules/mcp-remote/dist/proxy.js /usr/local/bin/mcp-remote \
- && ln -s "../lib/node_modules/@baruchiro/paperless-mcp/build/index.js" /usr/local/bin/paperless-mcp \
- && node --version && npm --version \
- && node -e "require('/usr/local/lib/node_modules/mcp-remote/package.json'); require('/usr/local/lib/node_modules/@baruchiro/paperless-mcp/package.json')" \
- && test -e /usr/local/bin/mcp-remote && test -e /usr/local/bin/paperless-mcp
-ENV NPM_CONFIG_CACHE=/tmp/.npm NPM_CONFIG_UPDATE_NOTIFIER=false
-
-WORKDIR /app
-
-EXPOSE 8000
-
-# /health needs neither auth nor a reachable engine; curl -f exits non-zero on
-# any failure, which is all HEALTHCHECK needs.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-    CMD ["curl", "-fsS", "http://localhost:8000/health"]
-
-ENTRYPOINT ["jarvis"]
-CMD ["serve", "--host", "0.0.0.0", "--port", "8000"]

@@ -16,6 +16,11 @@ name: Base image release
 # bumps `ARG BASE_VERSION` in Dockerfile / Dockerfile.gpu on its own schedule.
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - Dockerfile.base
+      - Dockerfile.base.gpu
+      - patches/**
   push:
     branches: [develop]
     paths:
