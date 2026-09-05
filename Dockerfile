@@ -56,7 +56,7 @@ RUN mkdir -p /src \
 # and navigator.clipboard (copy buttons throw). Loaded as a classic <script> in
 # <head> so it runs before the app bundle. Covered by test/ and smoke_test.sh.
 # ---------------------------------------------------------------------------
-FROM node:22-slim AS frontend-builder
+FROM node:24-slim AS frontend-builder
 
 COPY --from=sdist /src/frontend /fe
 COPY patches/insecure-context-polyfill.js /fe/public/insecure-context-polyfill.js
@@ -88,7 +88,7 @@ RUN --mount=type=cache,target=/root/.npm,sharing=locked \
 # runtime bases - Debian bookworm (this file) and Ubuntu 22.04 / glibc 2.35
 # (Dockerfile.gpu).
 # ---------------------------------------------------------------------------
-FROM node:22-bullseye-slim AS node-runtime
+FROM node:24-bullseye-slim AS node-runtime
 
 # renovate: datasource=npm depName=mcp-remote versioning=npm
 ARG MCP_REMOTE_VERSION=0.8.3
