@@ -18,7 +18,7 @@
 # renovate: datasource=pypi depName=openjarvis versioning=pep440
 ARG JARVIS_VERSION=1.0.3
 # renovate: datasource=docker depName=ghcr.io/m13tlabs/openjarvis-base
-ARG BASE_VERSION=2026.09.04
+ARG BASE_VERSION=2026.09.05
 
 # ---------------------------------------------------------------------------
 # Rust extension wheel - prebuilt, see the file header above.
