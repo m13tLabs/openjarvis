@@ -22,3 +22,4 @@ jobs:
       image_name: openjarvis
       dockerfiles: '["Dockerfile","Dockerfile.gpu"]'
       smoke_test: bash smoke_test.sh
+      dockerhub: true
