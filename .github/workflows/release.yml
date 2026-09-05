@@ -33,7 +33,7 @@ jobs:
       client_id: ${{ vars.CI_CLIENT_ID }}
       release_type: ${{ inputs.release_type }}
       custom_version: ${{ inputs.custom_version }}
-      default_branch: ${{ github.head_ref }}
+      default_branch: ${{ github.ref_name }}
       draft_release: ${{ inputs.draft_release }}
       dockerhub: true
       variant_dockerfile: Dockerfile.gpu
