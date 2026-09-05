@@ -18,6 +18,8 @@ jobs:
       contents: read
       pull-requests: write
       checks: write
+      packages: read
+      attestations: write
     with:
       image_name: openjarvis
       dockerfiles: '["Dockerfile","Dockerfile.gpu"]'
