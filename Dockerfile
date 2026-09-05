@@ -33,7 +33,7 @@ FROM ghcr.io/m13tlabs/openjarvis-base:${BASE_VERSION} AS rust-wheel
 # openjarvis). This is a plain download + tar extract, no compile, so unlike
 # the Rust build it isn't worth pulling from the base image too.
 # ---------------------------------------------------------------------------
-FROM python:3.12-slim AS sdist
+FROM python:3.14-slim AS sdist
 
 ARG JARVIS_VERSION
 
@@ -102,7 +102,7 @@ RUN --mount=type=cache,target=/root/.npm,sharing=locked \
 # ---------------------------------------------------------------------------
 # Python builder
 # ---------------------------------------------------------------------------
-FROM python:3.12-slim AS builder
+FROM python:3.14-slim AS builder
 
 ARG JARVIS_VERSION
 
@@ -153,7 +153,7 @@ RUN python -c "from openjarvis._rust_bridge import RUST_AVAILABLE; assert RUST_A
 # ---------------------------------------------------------------------------
 # Runtime
 # ---------------------------------------------------------------------------
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 ARG BUILD_DATE
 ARG APP_VERSION
