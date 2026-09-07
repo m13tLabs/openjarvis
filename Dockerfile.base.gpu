@@ -12,7 +12,7 @@
 ARG JARVIS_VERSION=1.0.3
 
 # renovate: datasource=docker depName=nvidia/cuda
-FROM nvidia/cuda:12.9.2-runtime-ubuntu22.04 AS rust-builder
+FROM nvidia/cuda:13.3.1-runtime-ubuntu22.04 AS rust-builder
 
 ARG JARVIS_VERSION
 
