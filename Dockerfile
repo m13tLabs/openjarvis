@@ -91,7 +91,7 @@ RUN --mount=type=cache,target=/root/.npm,sharing=locked \
 FROM node:22-bullseye-slim AS node-runtime
 
 # renovate: datasource=npm depName=mcp-remote versioning=npm
-ARG MCP_REMOTE_VERSION=0.8.7
+ARG MCP_REMOTE_VERSION=0.13.5
 # renovate: datasource=npm depName=@baruchiro/paperless-mcp versioning=npm
 ARG PAPERLESS_MCP_VERSION=2.2.1
 RUN --mount=type=cache,target=/root/.npm,sharing=locked \
