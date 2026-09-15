@@ -1,4 +1,29 @@
 
+## [0.2.2](https://github.com/m13tLabs/openjarvis/compare/v0.2.1...v0.2.2) (2026-09-15)
+
+### Dependency Updates
+
+* **deps:** Update ghcr.io/m13tlabs/openjarvis-base docker tag to v2026.09.07 ([3286f95](https://github.com/m13tLabs/openjarvis/commit/3286f951ca544d32b3f4a05cdeda5fe396438c82))
+
+* **deps:** Update dependency mcp-remote to v0.8.6 ([644325a](https://github.com/m13tLabs/openjarvis/commit/644325ac1d39ec701c906c266d110c0c7924cac6))
+
+* **deps:** Update ghcr.io/m13tlabs/openjarvis-base docker tag to v2026.09.09 ([4775f57](https://github.com/m13tLabs/openjarvis/commit/4775f5705744d41ce48583b95386492c41fbd121))
+
+* **deps:** Update dependency @baruchiro/paperless-mcp to v2.2.0 ([bdf9fca](https://github.com/m13tLabs/openjarvis/commit/bdf9fcaea71aa3842e0cdf8fead5fa0ef2928a9d))
+
+* **deps:** Update dependency mcp-remote to v0.8.7 ([07bd020](https://github.com/m13tLabs/openjarvis/commit/07bd0203ded7abb0c17cb8149b337ca4577796b7))
+
+* **deps:** Update dependency @baruchiro/paperless-mcp to v2.2.1 ([256ffdf](https://github.com/m13tLabs/openjarvis/commit/256ffdfc47785b764169255dea7296904ecb195e))
+
+* **deps:** Update dependency mcp-remote to v0.13.5 ([b2647a4](https://github.com/m13tLabs/openjarvis/commit/b2647a4035d694336331494cf879aa8fd127206d))
+
+* **deps:** Update dependency mcp-remote to v0.14.0 ([4a1d8dd](https://github.com/m13tLabs/openjarvis/commit/4a1d8dd98cdd9b2632efc4f2f38d8bd1c5ecdae2))
+
+* **deps:** Update dependency mcp-remote to v0.14.2 ([463e800](https://github.com/m13tLabs/openjarvis/commit/463e800cb8715d738b5c1008d4d01806edeca9b6))
+
+
+
+
 ## [0.2.1](https://github.com/m13tLabs/openjarvis/compare/v0.2.0...v0.2.1) (2026-09-07)
 
 ### Dependency Updates
