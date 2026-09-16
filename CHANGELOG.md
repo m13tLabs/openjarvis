@@ -1,4 +1,15 @@
 
+## [1.0.0](https://github.com/m13tLabs/openjarvis/compare/v0.2.2...v1.0.0) (2026-09-16)
+
+### Dependency Updates
+
+* **deps:** Update nvidia/cuda docker tag to v13 ([3aec39b](https://github.com/m13tLabs/openjarvis/commit/3aec39b8989838c58f71d41777e7a5d8b8b7150c))
+
+* **deps:** Update ghcr.io/m13tlabs/openjarvis-base docker tag to v2026.09.16 ([9636f88](https://github.com/m13tLabs/openjarvis/commit/9636f88d3597025ce8bd040668d0a67ec59afda2))
+
+
+
+
 ## [0.2.2](https://github.com/m13tLabs/openjarvis/compare/v0.2.1...v0.2.2) (2026-09-15)
 
 ### Dependency Updates
