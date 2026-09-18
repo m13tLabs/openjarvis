@@ -16,7 +16,7 @@
 # silent one.
 
 # renovate: datasource=pypi depName=openjarvis versioning=pep440
-ARG JARVIS_VERSION=1.0.3
+ARG JARVIS_VERSION=1.0.4
 # renovate: datasource=docker depName=ghcr.io/m13tlabs/openjarvis-base
 ARG BASE_VERSION=2026.09.16
 

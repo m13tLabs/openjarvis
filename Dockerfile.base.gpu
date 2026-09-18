@@ -9,7 +9,7 @@
 # docker.io/m13t/openjarvis-base:<version>-gpu.
 
 # renovate: datasource=pypi depName=openjarvis versioning=pep440
-ARG JARVIS_VERSION=1.0.3
+ARG JARVIS_VERSION=1.0.4
 
 # renovate: datasource=docker depName=nvidia/cuda
 FROM nvidia/cuda:13.3.1-runtime-ubuntu22.04 AS rust-builder
