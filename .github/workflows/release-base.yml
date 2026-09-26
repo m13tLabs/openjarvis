@@ -14,6 +14,11 @@ name: Base image release
 # JARVIS_VERSION (or patch) bump doesn't have to wait for Wednesday. No
 # commits are pushed - Renovate discovers new tags on the registry itself and
 # bumps `ARG BASE_VERSION` in Dockerfile / Dockerfile.gpu on its own schedule.
+#
+# Pull requests only build, never push: a PR's base (e.g. an unmerged
+# JARVIS_VERSION bump) published under the date tag gets picked up by
+# Renovate as the "latest" base for develop, whose version-skew guard then
+# fails the build (2026.09.24 was a 1.0.4 wheel while develop pinned 1.0.3).
 on:
   workflow_dispatch:
   pull_request:
@@ -68,6 +73,7 @@ jobs:
         uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -75,6 +81,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v4
         with:
           username: ${{ vars.DOCKER_HUB_USER }}
@@ -86,11 +93,11 @@ jobs:
           context: .
           file: ${{ matrix.dockerfile }}
           platforms: ${{ matrix.platforms }}
-          push: true
+          push: ${{ github.event_name != 'pull_request' }}
           tags: |
             ghcr.io/m13tlabs/openjarvis-base:${{ steps.version.outputs.version }}${{ matrix.suffix }}
             ghcr.io/m13tlabs/openjarvis-base:latest${{ matrix.suffix }}
             docker.io/m13t/openjarvis-base:${{ steps.version.outputs.version }}${{ matrix.suffix }}
             docker.io/m13t/openjarvis-base:latest${{ matrix.suffix }}
           cache-from: type=registry,ref=ghcr.io/m13tlabs/openjarvis-base:buildcache${{ matrix.suffix }}
-          cache-to: type=registry,ref=ghcr.io/m13tlabs/openjarvis-base:buildcache${{ matrix.suffix }},mode=max
+          cache-to: ${{ github.event_name != 'pull_request' && format('type=registry,ref=ghcr.io/m13tlabs/openjarvis-base:buildcache{0},mode=max', matrix.suffix) || '' }}

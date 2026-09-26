@@ -15,38 +15,41 @@ Applied in the image build against the installed package
 instead of silently dropping the feature.
 --- a/mcp/transport.py
 +++ b/mcp/transport.py
-@@ -2,6 +2,7 @@
+@@ -4,6 +4,7 @@
  
- from __future__ import annotations
- 
+ import json
+ import logging
 +import os
+ import queue
  import subprocess
- from abc import ABC, abstractmethod
- from typing import TYPE_CHECKING, Any, List, Optional
-@@ -58,8 +59,11 @@
-     stdin/stdout.
-     """
- 
--    def __init__(self, command: List[str]) -> None:
-+    def __init__(self, command: List[str], *, env: Optional[dict] = None) -> None:
+ import threading
+@@ -73,11 +74,15 @@
+         command: List[str],
+         *,
+         response_timeout: float = 600.0,
++        env: Optional[dict] = None,
+     ) -> None:
+         if response_timeout <= 0:
+             raise ValueError("response_timeout must be positive")
          self._command = command
+         self._response_timeout = response_timeout
 +        self._env = (
 +            {**os.environ, **{k: str(v) for k, v in env.items()}} if env else None
 +        )
          self._process: Optional[subprocess.Popen[str]] = None
-         self._start()
- 
-@@ -71,6 +75,7 @@
+         self._stdout_queue: queue.Queue[Any] = queue.Queue(
+             maxsize=self._STDOUT_QUEUE_SIZE
+@@ -100,6 +105,7 @@
              stdout=subprocess.PIPE,
              stderr=subprocess.PIPE,
              text=True,
 +            env=self._env,
          )
- 
-     def send(self, request: MCPRequest) -> MCPResponse:
+         self._reader_thread = threading.Thread(
+             target=self._read_stdout,
 --- a/mcp/loader.py
 +++ b/mcp/loader.py
-@@ -90,11 +90,12 @@
+@@ -88,11 +88,12 @@
              token = cfg.get("token")
              command = cfg.get("command", "")
              args = cfg.get("args", [])
