@@ -95,6 +95,30 @@ bumped and a base rebuild before `BASE_VERSION` in the thin Dockerfiles is
 worth bumping too - and until it is, the version-skew guard above fails the
 build rather than shipping the mismatch silently.
 
+**PR runs of `release-base.yml` build only, never push** (fixed 2026-09-26).
+Before that, the `pull_request` trigger pushed the real `<date>` + `latest`
+tags, so an *unmerged* PR's base leaked into the registry and Renovate
+offered it to `develop`: `2026.09.24` was built from the openjarvis 1.0.4
+PR (#21) while `develop` still pinned 1.0.3, and `2026.09.25-gpu` came from
+the Python 3.14 PR (#1). The skew guard caught it on the `BASE_VERSION` PR
+(#26). If a base tag looks suspicious, check what it was actually built
+against. The base is `FROM scratch`, so read the marker with
+`docker create --platform linux/amd64 <img> /x` + `docker cp <id>:/wheels/JARVIS_VERSION -`.
+
+**1.0.3 → 1.0.4 upstream changes that broke the build** (worth checking on
+every `JARVIS_VERSION` bump, since Renovate's PR only touches the ARGs):
+
+- The frontend's `package.json` `engines` requires `npm >=11.19 <12`, and
+  `node:22` ships npm 10, so `npm ci` fails with EBADENGINE. `frontend-builder`
+  is on `node:24-slim` now. `node-runtime` stays on 22 until its own Renovate PR.
+- The wheel now ships a prebuilt `openjarvis/server/static/`. Our
+  `cp -r /static <dir>/static` then nested ours as `static/static/` (the
+  polyfill assert caught it), so the builder now `rm -rf`s the shipped
+  directory first.
+- `StdioTransport` got a reader thread + `response_timeout`, so
+  `patches/mcp-stdio-env.patch` had to be regenerated. Upstream still ignores
+  `env`, so the patch is still needed.
+
 Keep `Dockerfile.base` and `Dockerfile.base.gpu` in sync with each other, and
 `Dockerfile`/`Dockerfile.gpu` in sync with each other, the same way the two
 top-level Dockerfiles always needed to be - same stages, CUDA vs. slim bases.

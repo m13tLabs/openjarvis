@@ -16,7 +16,7 @@
 # silent one.
 
 # renovate: datasource=pypi depName=openjarvis versioning=pep440
-ARG JARVIS_VERSION=1.0.3
+ARG JARVIS_VERSION=1.0.4
 # renovate: datasource=docker depName=ghcr.io/m13tlabs/openjarvis-base
 ARG BASE_VERSION=2026.09.24
 
@@ -56,7 +56,9 @@ RUN mkdir -p /src \
 # and navigator.clipboard (copy buttons throw). Loaded as a classic <script> in
 # <head> so it runs before the app bundle. Covered by test/ and smoke_test.sh.
 # ---------------------------------------------------------------------------
-FROM node:22-slim AS frontend-builder
+# node 24: the frontend's package.json (since openjarvis 1.0.4) pins
+# engines npm >=11.19 <12, node:22 ships npm 10 -> npm ci EBADENGINE.
+FROM node:24-slim AS frontend-builder
 
 COPY --from=sdist /src/frontend /fe
 COPY patches/insecure-context-polyfill.js /fe/public/insecure-context-polyfill.js
@@ -119,11 +121,15 @@ RUN BASE_JARVIS_VERSION="$(cat /wheels/JARVIS_VERSION)" \
       exit 1; \
     fi
 
+# Since 1.0.4 the wheel ships its own prebuilt server/static/ - replace it
+# with ours (polyfill-injected) rather than `cp -r` nesting ours inside it.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     pip install --no-cache-dir uv \
  && uv pip install --system "openjarvis[server]==${JARVIS_VERSION}" \
  && uv pip install --system /wheels/openjarvis_rust-*.whl \
- && cp -r /static "$(python -c 'import openjarvis.server, pathlib; print(pathlib.Path(openjarvis.server.__file__).parent / "static")')" \
+ && STATIC_DIR="$(python -c 'import openjarvis.server, pathlib; print(pathlib.Path(openjarvis.server.__file__).parent / "static")')" \
+ && rm -rf "$STATIC_DIR" \
+ && cp -r /static "$STATIC_DIR" \
  && rm -rf /wheels /static
 
 # Upstream's MCP stdio loader reads `command`/`args` from each server entry but
