@@ -23,6 +23,8 @@ jobs:
     with:
       image_name: openjarvis
       dockerfiles: '["Dockerfile","Dockerfile.gpu"]'
+      # GPU base image is amd64-only, like release.yml's variant_platforms.
+      dockerfile_platforms: '{"Dockerfile.gpu":"linux/amd64"}'
       smoke_test: bash smoke_test.sh
       dockerhub: true
     secrets: inherit
