@@ -1,4 +1,21 @@
 
+## [1.1.1](https://github.com/m13tLabs/openjarvis/compare/v1.1.0...v1.1.1) (2026-10-15)
+
+### Dependency Updates
+
+* **deps:** Update nvidia/cuda docker tag to v13.4.2 ([9ad2562](https://github.com/m13tLabs/openjarvis/commit/9ad256280f910776b4d10d385648bd994938f47c))
+
+* **deps:** Update ghcr.io/m13tlabs/openjarvis-base docker tag to v2026.10.08 ([696ed28](https://github.com/m13tLabs/openjarvis/commit/696ed2802dc3372938c9950b627c81ddb2911193))
+
+* **deps:** Update dependency mcp-remote to v0.15.0 ([6ea3023](https://github.com/m13tLabs/openjarvis/commit/6ea3023885391ab7b3db231727828d8b7e479f63))
+
+* **deps:** Update ghcr.io/m13tlabs/openjarvis-base docker tag to v2026.10.14 ([3961080](https://github.com/m13tLabs/openjarvis/commit/3961080e14e3627e56f9a0cbbe91dcbdf5b11193))
+
+* **deps:** Update dependency mcp-remote to v0.15.1 ([a66815c](https://github.com/m13tLabs/openjarvis/commit/a66815c9ec07fddd526e54998437160d7bb1a61c))
+
+
+
+
 ## [1.1.0](https://github.com/m13tLabs/openjarvis/compare/v1.0.0...v1.1.0) (2026-10-08)
 
 ### Dependency Updates
