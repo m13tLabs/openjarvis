@@ -138,6 +138,12 @@ docker exec "$APP" sh -c \
 pass "RUST_AVAILABLE is True"
 
 # ---------------------------------------------------------------------------
+step "optional litellm / cloud inference engines"
+docker exec "$APP" sh -c \
+  'PY=$(command -v python || command -v python3); "$PY" -c "from openjarvis.core.registry import EngineRegistry; import openjarvis.engine; assert {\"litellm\", \"cloud\"} <= set(EngineRegistry.keys())"'
+pass "litellm + cloud engines registered"
+
+# ---------------------------------------------------------------------------
 step "Node.js + MCP stdio shims"
 docker exec "$APP" node --version | grep -qE '^v22\.'
 pass "node v22 on PATH"
