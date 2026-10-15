@@ -121,11 +121,15 @@ RUN BASE_JARVIS_VERSION="$(cat /wheels/JARVIS_VERSION)" \
       exit 1; \
     fi
 
+# `inference-litellm` + `inference-cloud` extras: the `litellm` / `cloud`
+# engines are optional and only register (and show up in the UI engine
+# selector) when their SDKs import - `openjarvis.engine._register_optional_engines`
+# swallows the ImportError silently.
 # Since 1.0.4 the wheel ships its own prebuilt server/static/ - replace it
 # with ours (polyfill-injected) rather than `cp -r` nesting ours inside it.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     pip install --no-cache-dir uv \
- && uv pip install --system "openjarvis[server]==${JARVIS_VERSION}" \
+ && uv pip install --system "openjarvis[server,inference-litellm,inference-cloud]==${JARVIS_VERSION}" \
  && uv pip install --system /wheels/openjarvis_rust-*.whl \
  && STATIC_DIR="$(python -c 'import openjarvis.server, pathlib; print(pathlib.Path(openjarvis.server.__file__).parent / "static")')" \
  && rm -rf "$STATIC_DIR" \
@@ -151,10 +155,11 @@ RUN CSP_FILE="$(python -c 'import openjarvis.server.middleware as m; print(m.__f
  && sed -i "s|default-src 'self' 'unsafe-inline' 'unsafe-eval'|default-src 'self' 'unsafe-inline' 'unsafe-eval'; font-src 'self' data:; img-src 'self' data:|g" "$CSP_FILE"
 
 # Fail the build if the mandatory native extension, the web UI, the polyfill,
-# or the CSP fix did not land.
+# the CSP fix, or the optional litellm/cloud engines did not land.
 RUN python -c "from openjarvis._rust_bridge import RUST_AVAILABLE; assert RUST_AVAILABLE, 'openjarvis_rust missing'" \
  && python -c "import openjarvis.server, pathlib; d = pathlib.Path(openjarvis.server.__file__).parent / 'static'; assert (d / 'index.html').is_file(), 'frontend static/ missing'; assert (d / 'insecure-context-polyfill.js').is_file(), 'insecure-context polyfill missing'; assert 'insecure-context-polyfill.js' in (d / 'index.html').read_text(), 'polyfill not referenced by index.html'" \
- && python -c "from openjarvis.server.middleware import SECURITY_HEADERS as h; csp = h['Content-Security-Policy']; assert 'font-src' in csp and 'data:' in csp, csp"
+ && python -c "from openjarvis.server.middleware import SECURITY_HEADERS as h; csp = h['Content-Security-Policy']; assert 'font-src' in csp and 'data:' in csp, csp" \
+ && python -c "from openjarvis.core.registry import EngineRegistry; import openjarvis.engine; missing = {'litellm', 'cloud'} - set(EngineRegistry.keys()); assert not missing, f'optional engines not registered: {missing}'"
 
 # ---------------------------------------------------------------------------
 # Runtime
