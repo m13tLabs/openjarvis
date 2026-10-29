@@ -58,7 +58,7 @@ RUN mkdir -p /src \
 # ---------------------------------------------------------------------------
 # node 24: the frontend's package.json (since openjarvis 1.0.4) pins
 # engines npm >=11.19 <12, node:22 ships npm 10 -> npm ci EBADENGINE.
-FROM node:24-slim AS frontend-builder
+FROM node:26-slim AS frontend-builder
 
 COPY --from=sdist /src/frontend /fe
 COPY patches/insecure-context-polyfill.js /fe/public/insecure-context-polyfill.js
@@ -90,7 +90,7 @@ RUN --mount=type=cache,target=/root/.npm,sharing=locked \
 # runtime bases - Debian bookworm (this file) and Ubuntu 22.04 / glibc 2.35
 # (Dockerfile.gpu).
 # ---------------------------------------------------------------------------
-FROM node:22-bullseye-slim AS node-runtime
+FROM node:26-bullseye-slim AS node-runtime
 
 # renovate: datasource=npm depName=mcp-remote versioning=npm
 ARG MCP_REMOTE_VERSION=0.15.2
