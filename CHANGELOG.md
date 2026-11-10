@@ -1,4 +1,37 @@
 
+## [1.1.2](https://github.com/m13tLabs/openjarvis/compare/v1.1.1...v1.1.2) (2026-11-10)
+
+### Dependency Updates
+
+* **deps:** Update nvidia/cuda docker tag to v13.4.3 ([a97c991](https://github.com/m13tLabs/openjarvis/commit/a97c9915840a314884ff6d69efb4b9aabe307534))
+
+* **deps:** Update ghcr.io/m13tlabs/openjarvis-base docker tag to v2026.10.17 ([9437904](https://github.com/m13tLabs/openjarvis/commit/9437904c680bcc4a37697e2209d1cb548d6dfb64))
+
+* **deps:** Update dependency mcp-remote to v0.15.2 ([5fb4d94](https://github.com/m13tLabs/openjarvis/commit/5fb4d94921beb695e7af6486ac80253a0df9547f))
+
+* **deps:** Update ghcr.io/m13tlabs/openjarvis-base docker tag to v2026.10.21 ([ea86613](https://github.com/m13tLabs/openjarvis/commit/ea866131770b01123fcd06e06a5ca9bde17dbb73))
+
+* **deps:** Update ghcr.io/m13tlabs/openjarvis-base docker tag to v2026.10.28 ([7384370](https://github.com/m13tLabs/openjarvis/commit/7384370cecebb2cdbfd414d394e55897b101adc0))
+
+* **deps:** Update dependency mcp-remote to v0.16.0 ([c2c7d1a](https://github.com/m13tLabs/openjarvis/commit/c2c7d1a593bb6fb254926334afd9a92fb6a78bad))
+
+* **deps:** Update nvidia/cuda docker tag to v13.5.0 ([d2c3e71](https://github.com/m13tLabs/openjarvis/commit/d2c3e71a3cbe9aa47427d4c0000e156d4d6688ad))
+
+* **deps:** Update dependency mcp-remote to v0.16.4 ([b431026](https://github.com/m13tLabs/openjarvis/commit/b43102694cee351c23a2694512ec1d34e6fd1572))
+
+* **deps:** Update dependency mcp-remote to v0.16.5 ([28aea82](https://github.com/m13tLabs/openjarvis/commit/28aea82a0abecf05a7ccaf2b736b1b672ed04335))
+
+* **deps:** Update ghcr.io/m13tlabs/openjarvis-base docker tag to v2026.11.10 ([b910744](https://github.com/m13tLabs/openjarvis/commit/b9107448508d812d629128f3ec97dacc6b05f8c1))
+
+
+
+### Features
+
+* **OpenCode:** Upgrade to V2 ([47af959](https://github.com/m13tLabs/openjarvis/commit/47af9594cdf138f62e3430145cd80b464fa75982))
+
+
+
+
 ## [1.1.1](https://github.com/m13tLabs/openjarvis/compare/v1.1.0...v1.1.1) (2026-10-15)
 
 ### Dependency Updates
